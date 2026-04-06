@@ -30,7 +30,8 @@ import DottedGlowBackground from './components/DottedGlowBackground';
 import ArtifactCard from './components/ArtifactCard';
 import SideDrawer from './components/SideDrawer';
 import { 
-    ThinkingIcon
+    ThinkingIcon,
+    GoogleIcon
 } from './components/Icons';
 
 import { 
@@ -52,6 +53,9 @@ import {
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [isGuest, setIsGuest] = useState<boolean>(() => {
+    return localStorage.getItem('lut_ai_guest') === 'true';
+  });
   const [authLoading, setAuthLoading] = useState(true);
   
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -87,6 +91,17 @@ function App() {
 
   // History Listener
   useEffect(() => {
+    if (isGuest) {
+        const localHistory = localStorage.getItem('lut_ai_history');
+        if (localHistory) {
+            try {
+                setHistory(JSON.parse(localHistory));
+            } catch (e) {
+                console.error("Failed to parse local history", e);
+            }
+        }
+        return;
+    }
     if (!user) return;
     const q = query(
       collection(db, 'designs'),
@@ -104,9 +119,11 @@ function App() {
         } as Session;
       });
       setHistory(savedDesigns);
+    }, (error) => {
+        console.error("Firestore history error:", error);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, isGuest]);
 
   useEffect(() => {
       if (user && !isLoading) {
@@ -168,15 +185,34 @@ function App() {
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (error) {
+      setIsGuest(false);
+      localStorage.removeItem('lut_ai_guest');
+    } catch (error: any) {
       console.error("Login failed:", error);
+      if (error.code === 'auth/unauthorized-domain') {
+        const currentDomain = window.location.hostname;
+        alert(`Domain Error: The domain "${currentDomain}" is not authorized in the Firebase Console.\n\nTo fix this:\n1. Go to your Firebase Console.\n2. Navigate to Authentication > Settings > Authorized domains.\n3. Add "${currentDomain}" to the list.`);
+      } else {
+        alert("Login failed: " + error.message);
+      }
     }
+  };
+
+  const handleGuestLogin = () => {
+    setIsGuest(true);
+    localStorage.setItem('lut_ai_guest', 'true');
   };
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      if (isGuest) {
+        setIsGuest(false);
+        localStorage.removeItem('lut_ai_guest');
+      } else {
+        await signOut(auth);
+      }
       setSessions([]);
+      setHistory([]);
       setCurrentSessionIndex(-1);
       setDrawerState({ isOpen: false, mode: null, title: '', data: null });
     } catch (error) {
@@ -295,7 +331,15 @@ Required JSON Output Format (stream ONE object per line):
       }
   };
 
-  const saveToFirestore = async (session: Session) => {
+  const saveSession = async (session: Session) => {
+    if (isGuest) {
+        const localHistory = localStorage.getItem('lut_ai_history');
+        let currentHistory: Session[] = localHistory ? JSON.parse(localHistory) : [];
+        currentHistory = [session, ...currentHistory];
+        localStorage.setItem('lut_ai_history', JSON.stringify(currentHistory));
+        setHistory(currentHistory);
+        return;
+    }
     if (!user) return;
     try {
       await addDoc(collection(db, 'designs'), {
@@ -334,13 +378,19 @@ Required JSON Output Format (stream ONE object per line):
         artifacts: placeholderArtifacts
     };
 
-    setSessions(prev => [...prev, newSession]);
-    setCurrentSessionIndex(sessions.length); 
+    setSessions(prev => {
+        const updated = [...prev, newSession];
+        setCurrentSessionIndex(updated.length - 1);
+        return updated;
+    });
     setFocusedArtifactIndex(null); 
 
     try {
-        const apiKey = process.env.API_KEY;
-        if (!apiKey) throw new Error("API_KEY is not configured.");
+        const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+        if (!apiKey) {
+            alert("API Key is missing. Please check your settings.");
+            throw new Error("API_KEY is not configured.");
+        }
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const stylePrompt = `
@@ -467,20 +517,21 @@ Return ONLY RAW HTML. No markdown fences.
 
         const completedArtifacts = await Promise.all(placeholderArtifacts.map((art, i) => generateArtifact(art, generatedStyles[i])));
         
-        // Save to Firestore after all 3 are done
+        // Save session after all 3 are done
         const finalSession: Session = {
           ...newSession,
           artifacts: completedArtifacts as Artifact[]
         };
-        saveToFirestore(finalSession);
+        saveSession(finalSession);
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("Fatal error in generation process", e);
+        alert("An error occurred during generation: " + e.message);
     } finally {
         setIsLoading(false);
         setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [inputValue, isLoading, sessions.length, user]);
+  }, [inputValue, isLoading, sessions.length, user, isGuest]);
 
   const handleSurpriseMe = () => {
       const currentPrompt = placeholders[placeholderIndex];
@@ -529,7 +580,7 @@ Return ONLY RAW HTML. No markdown fences.
     );
   }
 
-  if (!user) {
+  if (!user && !isGuest) {
     return (
       <div className="login-screen">
         <DottedGlowBackground />
@@ -541,10 +592,28 @@ Return ONLY RAW HTML. No markdown fences.
         >
           <h1>LUT AI</h1>
           <p>Welcome to LUT AI. Explore what AI can do for your UI designs. Generate, iterate, and save your creations.</p>
-          <button className="google-login-btn" onClick={handleLogin}>
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/layout/google.svg" alt="Google" className="google-icon" />
-            Sign in with Google
+          
+          <button className="google-login-btn coming-soon" disabled>
+            <GoogleIcon />
+            My Coming Soon
           </button>
+
+          <div className="guest-login-section">
+            <button className="guest-login-btn" onClick={handleGuestLogin}>
+              Gastzugang
+            </button>
+            <p className="guest-hint">
+              Wird erst mal lokal gespeichert. Daten gehen nicht verloren.<br/>
+              Alle Daten werden lokal auf deinem Gerät gespeichert, so dass nur du deine Designs siehst – wir laden die Daten nur für dein Gerät.
+            </p>
+          </div>
+          
+          {window.location.hostname.includes('netlify.app') && (
+            <div className="domain-help">
+              <p>Hosting on Netlify? You must authorize this domain in the Firebase Console.</p>
+              <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer">Open Firebase Console</a>
+            </div>
+          )}
         </motion.div>
       </div>
     );

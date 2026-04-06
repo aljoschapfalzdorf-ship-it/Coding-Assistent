@@ -85,16 +85,77 @@ html, body {
     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
-.google-login-btn:hover {
+.google-login-btn:hover:not(:disabled) {
     background: #f8fafc;
     border-color: #cbd5e1;
     transform: translateY(-1px);
     box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
 }
 
-.google-icon {
+.google-login-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: #f1f5f9;
+}
+
+.guest-login-section {
+    margin-top: 2rem;
+    width: 100%;
+}
+
+.guest-login-btn {
+    width: 100%;
+    padding: 14px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.2);
+}
+
+.guest-login-btn:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+    box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.3);
+}
+
+.guest-hint {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+.google-icon, .google-login-btn svg {
     width: 20px;
     height: 20px;
+    flex-shrink: 0;
+}
+
+.domain-help {
+    margin-top: 24px;
+    padding: 16px;
+    background: #f1f5f9;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+.domain-help a {
+    display: inline-block;
+    margin-top: 8px;
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.domain-help a:hover {
+    text-decoration: underline;
 }
 
 /* === Top Bar & Menu === */
