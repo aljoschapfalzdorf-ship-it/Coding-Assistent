@@ -1,6 +1,5 @@
 {
   "name": "LUT AI",
-  "description": "Put Gemini 3 Flash's creativity and coding abilities to the test. Rapidly generate UI, explore variations, and export code.",
-  "requestFramePermissions": [],
-  "prompt": ""
+  "description": "LUT AI: Rapidly generate UI, explore variations, and save your designs. Powered by Gemini 3 Flash and Firebase.",
+  "requestFramePermissions": []
 }

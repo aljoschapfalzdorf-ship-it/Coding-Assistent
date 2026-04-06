@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: designs
+    // Fields:
+    //   - userId: string (required) - Owner UID
+    //   - prompt: string (required) - Original prompt
+    //   - timestamp: timestamp (required) - Creation time
+    //   - artifacts: list (required) - Array of artifact objects
+    //
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidDesign(data) {
+      return data.userId is string &&
+             data.prompt is string && data.prompt.size() > 0 && data.prompt.size() < 1000 &&
+             data.timestamp is timestamp &&
+             data.artifacts is list && data.artifacts.size() == 3;
+    }
+
+    match /designs/{designId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && isValidDesign(request.resource.data) && request.resource.data.userId == request.auth.uid;
+      allow update: if false; // Designs are immutable for now
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}

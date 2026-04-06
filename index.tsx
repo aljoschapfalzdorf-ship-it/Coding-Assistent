@@ -8,8 +8,21 @@
 import { GoogleGenAI } from '@google/genai';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+    Menu, 
+    LogOut, 
+    History as HistoryIcon, 
+    Sparkles, 
+    Code, 
+    LayoutGrid, 
+    ArrowLeft, 
+    ArrowRight, 
+    ArrowUp,
+    Search
+} from 'lucide-react';
 
-import { Artifact, Session, ComponentVariation, LayoutOption } from './types';
+import { Artifact, Session, ComponentVariation } from './types';
 import { INITIAL_PLACEHOLDERS } from './constants';
 import { generateId } from './utils';
 
@@ -17,16 +30,30 @@ import DottedGlowBackground from './components/DottedGlowBackground';
 import ArtifactCard from './components/ArtifactCard';
 import SideDrawer from './components/SideDrawer';
 import { 
-    ThinkingIcon, 
-    CodeIcon, 
-    SparklesIcon, 
-    ArrowLeftIcon, 
-    ArrowRightIcon, 
-    ArrowUpIcon, 
-    GridIcon 
+    ThinkingIcon
 } from './components/Icons';
 
+import { 
+    auth, 
+    db, 
+    googleProvider, 
+    signInWithPopup, 
+    signOut, 
+    onAuthStateChanged, 
+    collection, 
+    addDoc, 
+    query, 
+    where, 
+    orderBy, 
+    onSnapshot,
+    Timestamp,
+    User
+} from './firebase';
+
 function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionIndex, setCurrentSessionIndex] = useState<number>(-1);
   const [focusedArtifactIndex, setFocusedArtifactIndex] = useState<number | null>(null);
@@ -38,19 +65,54 @@ function App() {
   
   const [drawerState, setDrawerState] = useState<{
       isOpen: boolean;
-      mode: 'code' | 'variations' | null;
+      mode: 'code' | 'variations' | 'history' | 'menu' | null;
       title: string;
       data: any; 
   }>({ isOpen: false, mode: null, title: '', data: null });
 
   const [componentVariations, setComponentVariations] = useState<ComponentVariation[]>([]);
+  const [history, setHistory] = useState<Session[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
 
+  // Auth Listener
   useEffect(() => {
-      inputRef.current?.focus();
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
+
+  // History Listener
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, 'designs'),
+      where('userId', '==', user.uid),
+      orderBy('timestamp', 'desc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const savedDesigns = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          prompt: data.prompt,
+          timestamp: data.timestamp.toMillis(),
+          artifacts: data.artifacts
+        } as Session;
+      });
+      setHistory(savedDesigns);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+      if (user && !isLoading) {
+        inputRef.current?.focus();
+      }
+  }, [user, isLoading]);
 
   // Fix for mobile: reset scroll when focusing an item to prevent "overscroll" state
   useEffect(() => {
@@ -76,15 +138,10 @@ function App() {
           try {
               const apiKey = process.env.API_KEY;
               if (!apiKey) return;
-              const ai = new GoogleGenAI({ apiKey });
+              const ai = new GoogleGenAI({ apiKey: apiKey });
               const response = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
-                  contents: { 
-                      role: 'user', 
-                      parts: [{ 
-                          text: 'Generate 20 creative, short, diverse UI component prompts (e.g. "bioluminescent task list"). Return ONLY a raw JSON array of strings. IP SAFEGUARD: Avoid referencing specific famous artists, movies, or brands.' 
-                      }] 
-                  }
+                  contents: "Generate 20 creative, short, diverse UI component prompts (e.g. 'bioluminescent task list'). Return ONLY a raw JSON array of strings. IP SAFEGUARD: Avoid referencing specific famous artists, movies, or brands."
               });
               const text = response.text || '[]';
               const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -99,14 +156,35 @@ function App() {
               console.warn("Silently failed to fetch dynamic placeholders", e);
           }
       };
-      setTimeout(fetchDynamicPlaceholders, 1000);
-  }, []);
+      if (user) {
+        setTimeout(fetchDynamicPlaceholders, 1000);
+      }
+  }, [user]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(event.target.value);
   };
 
-  const parseJsonStream = async function* (responseStream: AsyncGenerator<{ text: string }>) {
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setSessions([]);
+      setCurrentSessionIndex(-1);
+      setDrawerState({ isOpen: false, mode: null, title: '', data: null });
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  const parseJsonStream = async function* (responseStream: AsyncIterable<any>) {
       let buffer = '';
       for await (const chunk of responseStream) {
           const text = chunk.text;
@@ -153,7 +231,7 @@ function App() {
     try {
         const apiKey = process.env.API_KEY;
         if (!apiKey) throw new Error("API_KEY is not configured.");
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const prompt = `
 You are a master UI/UX designer. Generate 3 RADICAL CONCEPTUAL VARIATIONS of: "${currentSession.prompt}".
@@ -180,7 +258,7 @@ Required JSON Output Format (stream ONE object per line):
 
         const responseStream = await ai.models.generateContentStream({
             model: 'gemini-3-flash-preview',
-             contents: [{ parts: [{ text: prompt }], role: 'user' }],
+             contents: prompt,
              config: { temperature: 1.2 }
         });
 
@@ -217,6 +295,20 @@ Required JSON Output Format (stream ONE object per line):
       }
   };
 
+  const saveToFirestore = async (session: Session) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'designs'), {
+        userId: user.uid,
+        prompt: session.prompt,
+        timestamp: Timestamp.fromDate(new Date(session.timestamp)),
+        artifacts: session.artifacts
+      });
+    } catch (e) {
+      console.error("Error saving to Firestore:", e);
+    }
+  };
+
   const handleSendMessage = useCallback(async (manualPrompt?: string) => {
     const promptToUse = manualPrompt || inputValue;
     const trimmedInput = promptToUse.trim();
@@ -249,7 +341,7 @@ Required JSON Output Format (stream ONE object per line):
     try {
         const apiKey = process.env.API_KEY;
         if (!apiKey) throw new Error("API_KEY is not configured.");
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const stylePrompt = `
 Generate 3 distinct, highly evocative design directions for: "${trimmedInput}".
@@ -269,7 +361,7 @@ Return ONLY a raw JSON array of 3 *NEW*, creative names for these directions (e.
 
         const styleResponse = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: { role: 'user', parts: [{ text: stylePrompt }] }
+            contents: stylePrompt
         });
 
         let generatedStyles: string[] = [];
@@ -308,7 +400,7 @@ Return ONLY a raw JSON array of 3 *NEW*, creative names for these directions (e.
         const generateArtifact = async (artifact: Artifact, styleInstruction: string) => {
             try {
                 const prompt = `
-You are Flash UI. Create a stunning, high-fidelity UI component for: "${trimmedInput}".
+You are LUT AI. Create a stunning, high-fidelity UI component for: "${trimmedInput}".
 
 **CONCEPTUAL DIRECTION: ${styleInstruction}**
 
@@ -324,7 +416,7 @@ Return ONLY RAW HTML. No markdown fences.
           
                 const responseStream = await ai.models.generateContentStream({
                     model: 'gemini-3-flash-preview',
-                    contents: [{ parts: [{ text: prompt }], role: "user" }],
+                    contents: prompt,
                 });
 
                 let accumulatedHtml = '';
@@ -357,6 +449,8 @@ Return ONLY RAW HTML. No markdown fences.
                     } : sess
                 ));
 
+                return { ...artifact, html: finalHtml, status: 'complete' as const };
+
             } catch (e: any) {
                 console.error('Error generating artifact:', e);
                 setSessions(prev => prev.map(sess => 
@@ -367,10 +461,18 @@ Return ONLY RAW HTML. No markdown fences.
                         )
                     } : sess
                 ));
+                return { ...artifact, status: 'error' as const };
             }
         };
 
-        await Promise.all(placeholderArtifacts.map((art, i) => generateArtifact(art, generatedStyles[i])));
+        const completedArtifacts = await Promise.all(placeholderArtifacts.map((art, i) => generateArtifact(art, generatedStyles[i])));
+        
+        // Save to Firestore after all 3 are done
+        const finalSession: Session = {
+          ...newSession,
+          artifacts: completedArtifacts as Artifact[]
+        };
+        saveToFirestore(finalSession);
 
     } catch (e) {
         console.error("Fatal error in generation process", e);
@@ -378,7 +480,7 @@ Return ONLY RAW HTML. No markdown fences.
         setIsLoading(false);
         setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [inputValue, isLoading, sessions.length]);
+  }, [inputValue, isLoading, sessions.length, user]);
 
   const handleSurpriseMe = () => {
       const currentPrompt = placeholders[placeholderIndex];
@@ -412,8 +514,43 @@ Return ONLY RAW HTML. No markdown fences.
       }
   }, [currentSessionIndex, focusedArtifactIndex]);
 
-  const isLoadingDrawer = isLoading && drawerState.mode === 'variations' && componentVariations.length === 0;
+  const loadFromHistory = (session: Session) => {
+    setSessions([session]);
+    setCurrentSessionIndex(0);
+    setFocusedArtifactIndex(null);
+    setDrawerState({ isOpen: false, mode: null, title: '', data: null });
+  };
 
+  if (authLoading) {
+    return (
+      <div className="login-screen">
+        <ThinkingIcon />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="login-screen">
+        <DottedGlowBackground />
+        <motion.div 
+          className="login-content"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+        >
+          <h1>LUT AI</h1>
+          <p>Welcome to LUT AI. Explore what AI can do for your UI designs. Generate, iterate, and save your creations.</p>
+          <button className="google-login-btn" onClick={handleLogin}>
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/layout/google.svg" alt="Google" className="google-icon" />
+            Sign in with Google
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  const isLoadingDrawer = isLoading && drawerState.mode === 'variations' && componentVariations.length === 0;
   const hasStarted = sessions.length > 0 || isLoading;
   const currentSession = sessions[currentSessionIndex];
 
@@ -432,9 +569,14 @@ Return ONLY RAW HTML. No markdown fences.
 
   return (
     <>
-        <a href="https://x.com/ammaar" target="_blank" rel="noreferrer" className={`creator-credit ${hasStarted ? 'hide-on-mobile' : ''}`}>
-            created by @ammaar
-        </a>
+        <div className="top-bar">
+          <div className="top-bar-logo">LUT AI</div>
+          <button className="menu-trigger" onClick={() => setDrawerState({ isOpen: true, mode: 'menu', title: 'Menu', data: null })}>
+            <div className="menu-line" />
+            <div className="menu-line" />
+            <div className="menu-line" />
+          </button>
+        </div>
 
         <SideDrawer 
             isOpen={drawerState.isOpen} 
@@ -446,6 +588,34 @@ Return ONLY RAW HTML. No markdown fences.
                      <ThinkingIcon /> 
                      Designing variations...
                  </div>
+            )}
+
+            {drawerState.mode === 'menu' && (
+              <div className="menu-list">
+                <div className="menu-item" onClick={() => setDrawerState({ isOpen: true, mode: 'history', title: 'My Designs', data: null })}>
+                  <HistoryIcon size={20} />
+                  My Designs
+                </div>
+                <div className="menu-item danger" onClick={handleLogout}>
+                  <LogOut size={20} />
+                  Logout
+                </div>
+              </div>
+            )}
+
+            {drawerState.mode === 'history' && (
+              <div className="history-list">
+                {history.length === 0 ? (
+                  <div className="loading-state">No designs saved yet.</div>
+                ) : (
+                  history.map((item) => (
+                    <div key={item.id} className="history-item" onClick={() => loadFromHistory(item)}>
+                      <span className="history-prompt">{item.prompt}</span>
+                      <span className="history-date">{new Date(item.timestamp).toLocaleString()}</span>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
 
             {drawerState.mode === 'code' && (
@@ -470,18 +640,15 @@ Return ONLY RAW HTML. No markdown fences.
             <DottedGlowBackground 
                 gap={24} 
                 radius={1.5} 
-                color="rgba(255, 255, 255, 0.02)" 
-                glowColor="rgba(255, 255, 255, 0.15)" 
-                speedScale={0.5} 
             />
 
             <div className={`stage-container ${focusedArtifactIndex !== null ? 'mode-focus' : 'mode-split'}`}>
                  <div className={`empty-state ${hasStarted ? 'fade-out' : ''}`}>
                      <div className="empty-content">
-                         <h1>Flash UI</h1>
+                         <h1>LUT AI</h1>
                          <p>Creative UI generation in a flash</p>
                          <button className="surprise-button" onClick={handleSurpriseMe} disabled={isLoading}>
-                             <SparklesIcon /> Surprise Me
+                             <Sparkles size={20} /> Surprise Me
                          </button>
                      </div>
                  </div>
@@ -515,12 +682,12 @@ Return ONLY RAW HTML. No markdown fences.
 
              {canGoBack && (
                 <button className="nav-handle left" onClick={prevItem} aria-label="Previous">
-                    <ArrowLeftIcon />
+                    <ArrowLeft size={32} />
                 </button>
              )}
              {canGoForward && (
                 <button className="nav-handle right" onClick={nextItem} aria-label="Next">
-                    <ArrowRightIcon />
+                    <ArrowRight size={32} />
                 </button>
              )}
 
@@ -530,13 +697,13 @@ Return ONLY RAW HTML. No markdown fences.
                  </div>
                  <div className="action-buttons">
                     <button onClick={() => setFocusedArtifactIndex(null)}>
-                        <GridIcon /> Grid View
+                        <LayoutGrid size={18} /> Grid View
                     </button>
                     <button onClick={handleGenerateVariations} disabled={isLoading}>
-                        <SparklesIcon /> Variations
+                        <Sparkles size={18} /> Variations
                     </button>
                     <button onClick={handleShowCode}>
-                        <CodeIcon /> Source
+                        <Code size={18} /> Source
                     </button>
                  </div>
             </div>
@@ -545,6 +712,7 @@ Return ONLY RAW HTML. No markdown fences.
                 <div className={`input-wrapper ${isLoading ? 'loading' : ''}`}>
                     {(!inputValue && !isLoading) && (
                         <div className="animated-placeholder" key={placeholderIndex}>
+                            <Search size={18} style={{ opacity: 0.5 }} />
                             <span className="placeholder-text">{placeholders[placeholderIndex]}</span>
                             <span className="tab-hint">Tab</span>
                         </div>
@@ -565,7 +733,7 @@ Return ONLY RAW HTML. No markdown fences.
                         </div>
                     )}
                     <button className="send-button" onClick={() => handleSendMessage()} disabled={isLoading || !inputValue.trim()}>
-                        <ArrowUpIcon />
+                        <ArrowUp size={20} />
                     </button>
                 </div>
             </div>

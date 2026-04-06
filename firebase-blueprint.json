@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "DesignSet": {
+      "title": "Design Set",
+      "description": "A set of three generated UI variations",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the owner" },
+        "prompt": { "type": "string", "description": "The original prompt" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When it was created" },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "styleName": { "type": "string" },
+              "html": { "type": "string" },
+              "status": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["userId", "prompt", "timestamp", "artifacts"]
+    }
+  },
+  "firestore": {
+    "designs": {
+      "schema": "DesignSet",
+      "description": "Collection of saved UI designs"
+    }
+  }
+}
